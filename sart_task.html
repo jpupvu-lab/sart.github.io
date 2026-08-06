@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SART - Attention Task</title>
+<style>
+  html,body{
+    height:100%; margin:0; background:#111; color:#eee;
+    font-family:Arial, Helvetica, sans-serif; text-align:center;
+    display:flex; align-items:center; justify-content:center;
+  }
+  #app{ width:90%; max-width:700px; }
+  #stimulus{ font-weight:bold; color:#fff; display:none; }
+  #mask{
+    width:200px; height:200px; margin:0 auto; display:none;
+    border-radius:8px; background:#888;
+  }
+  .screen{ display:none; }
+  .active{ display:block; }
+  button{
+    font-size:18px; padding:12px 28px; margin-top:24px;
+    cursor:pointer; border:none; border-radius:6px;
+    background:#3a6df0; color:#fff;
+  }
+  button:hover{ background:#2a55c5; }
+  #feedback{
+    display:none; font-size:28px; font-weight:bold;
+  }
+  #feedback.wrong{ color:#ff5c5c; }
+  #feedback.missed{ color:#ffb84d; }
+  textarea{
+    width:100%; height:70px; font-size:14px; margin-top:12px;
+  }
+  .small{ font-size:14px; color:#aaa; }
+  #resultsBox{ text-align:left; font-size:15px; line-height:1.5; }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- INTRO -->
+  <div id="screen-intro" class="screen active">
+    <h2>Attention Task</h2>
+    <p>You will see single digits (1–9) appear one at a time in the middle of the
+    screen.</p>
+    <p><strong>Press the SPACE BAR</strong> as quickly as possible for every digit
+    <u>except</u> the digit <strong>3</strong>.</p>
+    <p>When you see <strong>3</strong>, do <u>not</u> press anything — just let it pass.</p>
+    <p class="small">There will be a short practice round first, followed by the
+    main task. Please stay in full-screen and avoid switching tabs.</p>
+    <button id="btnStartPractice">Start practice</button>
+  </div>
+
+  <!-- READY -->
+  <div id="screen-ready" class="screen">
+    <h2 id="readyText">Get Ready</h2>
+    <p class="small">The task will begin automatically.</p>
+  </div>
+
+  <!-- TASK -->
+  <div id="screen-task" class="screen">
+    <div id="stimulus">0</div>
+    <div id="mask"></div>
+    <div id="feedback"></div>
+  </div>
+
+  <!-- PRACTICE FEEDBACK -->
+  <div id="screen-practice-summary" class="screen">
+    <h2>Practice complete</h2>
+    <p id="practiceSummaryText"></p>
+    <button id="btnStartMain">Start main task</button>
+  </div>
+
+  <!-- FINAL RESULTS -->
+  <div id="screen-results" class="screen">
+    <h2>Task complete — thank you</h2>
+    <div id="resultsBox"></div>
+    <p><strong>Copy the code below and paste it into the survey question that
+    asks for your SART result code.</strong></p>
+    <textarea id="resultCode" readonly></textarea>
+    <br>
+    <button id="btnCopy">Copy code</button>
+    <button id="btnGoToForm" style="display:none;">Continue to survey</button>
+  </div>
+
+</div>
+
+<script>
+/* ---------------------------------------------------------------------
+   CONFIGURATION
+   --------------------------------------------------------------------- */
+const CONFIG = {
+  practiceReps: 2,     // digits 1-9 repeated this many times = 18 practice trials
+  mainReps: 25,        // digits 1-9 repeated this many times = 225 main trials
+                        // (this matches the original SART; lower it, e.g. to 8-10,
+                        // if you are worried about participant fatigue/drop-off
+                        // on an online survey)
+  digitPhaseMs: 250,    // time the digit itself is shown
+  totalTrialMs: 1150,   // full trial window (digit + mask), matches original SART
+  mistakeFeedbackMs: 3000,
+  postMistakeBlankMs: 500,
+  fontSizesPx: [72, 94, 100, 120, 140],
+
+  // --- OPTIONAL: auto-redirect into a pre-filled Google Form ---
+  // Leave GOOGLE_FORM_PREFILL_BASE empty to disable auto-redirect and just
+  // show the copy-paste code instead.
+  // To get this URL: open your Form -> the 3-dot menu -> "Get pre-filled link"
+  // -> fill the result-code question with the placeholder text RESULT_CODE_HERE
+  // -> copy the generated link and paste it below.
+  GOOGLE_FORM_PREFILL_BASE: "" 
+  // e.g. "https://docs.google.com/forms/d/e/1FAIpQLSf.../viewform?usp=pp_url&entry.123456789=RESULT_CODE_HERE"
+};
+
+/* ---------------------------------------------------------------------
+   STATE
+   --------------------------------------------------------------------- */
+let trialLog = [];          // full trial-by-trial data
+let sessionId = "S" + Math.floor(Math.random() * 1e9).toString(36).toUpperCase();
+
+function show(id){
+  document.querySelectorAll(".screen").forEach(s => s.classList.remove("active"));
+  document.getElementById(id).classList.add("active");
+}
+
+function wait(ms){ return new Promise(res => setTimeout(res, ms)); }
+
+function waitForSpaceOrTimeout(ms){
+  return new Promise(resolve => {
+    let done = false;
+    const start = performance.now();
+    function onKey(e){
+      if ((e.code === "Space" || e.key === " ") && !done){
+        done = true; cleanup();
+        resolve({ pressed:true, rt: performance.now() - start });
+      }
+    }
+    const timer = setTimeout(() => {
+      if (!done){ done = true; cleanup(); resolve({ pressed:false, rt:null }); }
+    }, ms);
+    function cleanup(){
+      window.removeEventListener("keydown", onKey);
+      clearTimeout(timer);
+    }
+    window.addEventListener("keydown", onKey);
+  });
+}
+
+/* build a shuffled digit list 1-9 repeated `reps` times, no immediate repeats */
+function buildDigitList(reps){
+  let pool = [];
+  for (let r = 0; r < reps; r++){
+    for (let d = 1; d <= 9; d++) pool.push(d);
+  }
+  // shuffle
+  for (let i = pool.length - 1; i > 0; i--){
+    const j = Math.floor(Math.random() * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  // remove immediate repeats by local swapping
+  for (let i = 1; i < pool.length; i++){
+    if (pool[i] === pool[i-1]){
+      let swapWith = -1;
+      for (let k = i+1; k < pool.length; k++){
+        if (pool[k] !== pool[i-1]){ swapWith = k; break; }
+      }
+      if (swapWith !== -1){
+        [pool[i], pool[swapWith]] = [pool[swapWith], pool[i]];
+      }
+    }
+  }
+  return pool;
+}
+
+/* ---------------------------------------------------------------------
+   TRIAL LOGIC
+   --------------------------------------------------------------------- */
+async function runTrial(digit, blockName, trialIndex){
+  const stimEl = document.getElementById("stimulus");
+  const maskEl = document.getElementById("mask");
+  const fbEl = document.getElementById("feedback");
+
+  stimEl.style.fontSize =
+    CONFIG.fontSizesPx[Math.floor(Math.random() * CONFIG.fontSizesPx.length)] + "px";
+  stimEl.textContent = digit;
+  stimEl.style.display = "block";
+  maskEl.style.display = "none";
+  fbEl.style.display = "none";
+
+  const trialStart = performance.now();
+
+  // Phase 1: digit visible, listen for response
+  const phase1 = await waitForSpaceOrTimeout(CONFIG.digitPhaseMs);
+  stimEl.style.display = "none";
+
+  let pressed = phase1.pressed;
+  let rt = phase1.rt;
+
+  // Phase 2: mask visible for the remainder of the trial window, still listening
+  maskEl.style.display = "block";
+  maskEl.style.background = pressed ? "#2ecc71" : "#888";
+
+  if (!pressed){
+    const remaining = CONFIG.totalTrialMs - CONFIG.digitPhaseMs;
+    const phase2 = await waitForSpaceOrTimeout(remaining);
+    if (phase2.pressed){
+      pressed = true;
+      rt = CONFIG.digitPhaseMs + phase2.rt;
+      maskEl.style.background = "#2ecc71";
+      await wait(60); // brief green flash so it's visible
+    }
+  }
+  maskEl.style.display = "none";
+
+  const isNoGo = (digit === 3);
+  let mistake = false;
+  let mistakeType = null;
+
+  if (isNoGo && pressed){ mistake = true; mistakeType = "wrong_press"; }
+  if (!isNoGo && !pressed){ mistake = true; mistakeType = "missed"; }
+
+  if (mistake){
+    fbEl.className = mistakeType === "wrong_press" ? "wrong" : "missed";
+    fbEl.textContent = mistakeType === "wrong_press"
+      ? "Oops — that was a 3. Don't press for 3."
+      : "Missed one — press SPACE faster for non-3 digits.";
+    fbEl.style.display = "block";
+    await wait(CONFIG.mistakeFeedbackMs);
+    fbEl.style.display = "none";
+    await wait(CONFIG.postMistakeBlankMs);
+  } else {
+    // pad remaining time so the pace stays consistent trial to trial
+    const elapsed = performance.now() - trialStart;
+    const remainder = CONFIG.totalTrialMs - elapsed;
+    if (remainder > 0) await wait(remainder);
+  }
+
+  trialLog.push({
+    block: blockName,
+    trialIndex,
+    digit,
+    trialType: isNoGo ? "nogo" : "go",
+    pressed,
+    rt: rt !== null ? Math.round(rt) : null,
+    correct: !mistake
+  });
+}
+
+async function runBlock(digitList, blockName){
+  for (let i = 0; i < digitList.length; i++){
+    await runTrial(digitList[i], blockName, i);
+  }
+}
+
+async function readyCountdown(){
+  show("screen-ready");
+  const el = document.getElementById("readyText");
+  for (const n of [3,2,1]){
+    el.textContent = "Get Ready: " + n;
+    await wait(700);
+  }
+  el.textContent = "Go!";
+  await wait(400);
+}
+
+/* ---------------------------------------------------------------------
+   FLOW
+   --------------------------------------------------------------------- */
+document.getElementById("btnStartPractice").addEventListener("click", async () => {
+  await readyCountdown();
+  show("screen-task");
+  const practiceDigits = buildDigitList(CONFIG.practiceReps);
+  await runBlock(practiceDigits, "practice");
+
+  const practiceTrials = trialLog.filter(t => t.block === "practice");
+  const goTrials = practiceTrials.filter(t => t.trialType === "go");
+  const noGoTrials = practiceTrials.filter(t => t.trialType === "nogo");
+  const goCorrect = goTrials.filter(t => t.correct).length;
+  const noGoCorrect = noGoTrials.filter(t => t.correct).length;
+
+  document.getElementById("practiceSummaryText").textContent =
+    `You correctly responded to ${goCorrect}/${goTrials.length} non-3 digits, ` +
+    `and correctly withheld on ${noGoCorrect}/${noGoTrials.length} trials with a 3. ` +
+    `Click below when ready to start the real task — mistakes here won't be scored.`;
+
+  show("screen-practice-summary");
+});
+
+document.getElementById("btnStartMain").addEventListener("click", async () => {
+  trialLog = trialLog.filter(t => t.block !== "practice"); // drop practice data
+  await readyCountdown();
+  show("screen-task");
+  const mainDigits = buildDigitList(CONFIG.mainReps);
+  await runBlock(mainDigits, "main");
+  finishTask();
+});
+
+function finishTask(){
+  const mainTrials = trialLog; // practice already stripped
+  const goTrials = mainTrials.filter(t => t.trialType === "go");
+  const noGoTrials = mainTrials.filter(t => t.trialType === "nogo");
+  const goErrors = goTrials.filter(t => !t.correct).length;   // missed go = omission errors
+  const noGoErrors = noGoTrials.filter(t => !t.correct).length; // pressed on 3 = commission errors
+  const rts = goTrials.filter(t => t.correct && t.rt !== null).map(t => t.rt);
+  const meanRT = rts.length ? Math.round(rts.reduce((a,b)=>a+b,0) / rts.length) : null;
+  const goAcc = goTrials.length ? Math.round(100 * (goTrials.length - goErrors) / goTrials.length) : null;
+  const noGoAcc = noGoTrials.length ? Math.round(100 * (noGoTrials.length - noGoErrors) / noGoTrials.length) : null;
+
+  const summary = {
+    sessionId,
+    timestamp: new Date().toISOString(),
+    totalGoTrials: goTrials.length,
+    goOmissionErrors: goErrors,
+    goAccuracyPct: goAcc,
+    totalNoGoTrials: noGoTrials.length,
+    noGoCommissionErrors: noGoErrors,
+    noGoAccuracyPct: noGoAcc,
+    meanGoRT_ms: meanRT
+  };
+
+  document.getElementById("resultsBox").innerHTML = `
+    Session ID: <strong>${summary.sessionId}</strong><br>
+    Go trials (should press): ${summary.totalGoTrials}, omission errors: ${summary.goOmissionErrors}
+    (${summary.goAccuracyPct}% correct)<br>
+    No-Go trials (should withhold, digit 3): ${summary.totalNoGoTrials}, commission errors:
+    ${summary.noGoCommissionErrors} (${summary.noGoAccuracyPct}% correct)<br>
+    Mean RT on correct Go trials: ${summary.meanGoRT_ms} ms
+  `;
+
+  const code = btoa(JSON.stringify(summary));
+  document.getElementById("resultCode").value = code;
+
+  if (CONFIG.GOOGLE_FORM_PREFILL_BASE){
+    const url = CONFIG.GOOGLE_FORM_PREFILL_BASE.replace("RESULT_CODE_HERE", encodeURIComponent(code));
+    const btn = document.getElementById("btnGoToForm");
+    btn.style.display = "inline-block";
+    btn.addEventListener("click", () => { window.location.href = url; });
+  }
+
+  show("screen-results");
+}
+
+document.getElementById("btnCopy").addEventListener("click", () => {
+  const box = document.getElementById("resultCode");
+  box.select();
+  document.execCommand("copy");
+});
+</script>
+</body>
+</html>

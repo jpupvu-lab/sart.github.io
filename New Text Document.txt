@@ -1,4 +1,5 @@
-<!DOCTYPE html>
+-top:24px;
+    cursor:pointer; border:none; border-r<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -18,8 +19,7 @@
   .screen{ display:none; }
   .active{ display:block; }
   button{
-    font-size:18px; padding:12px 28px; margin-top:24px;
-    cursor:pointer; border:none; border-radius:6px;
+    font-size:18px; padding:12px 28px; marginadius:6px;
     background:#3a6df0; color:#fff;
   }
   button:hover{ background:#2a55c5; }
@@ -43,10 +43,9 @@
     <h2>Attention Task</h2>
     <p>You will see single digits (1–9) appear one at a time in the middle of the
     screen.</p>
-    <p id="respondInstruction"><strong>Press the SPACE BAR</strong> (or <strong>tap anywhere on
-    the screen</strong> if you're on a phone) as quickly as possible for every digit
+    <p><strong>Press the SPACE BAR</strong> as quickly as possible for every digit
     <u>except</u> the digit <strong>3</strong>.</p>
-    <p>When you see <strong>3</strong>, do <u>not</u> press or tap anything — just let it pass.</p>
+    <p>When you see <strong>3</strong>, do <u>not</u> press anything — just let it pass.</p>
     <p class="small">There will be a short practice round first, followed by the
     main task. Please stay in full-screen and avoid switching tabs.</p>
     <button id="btnStartPractice">Start practice</button>
@@ -125,38 +124,24 @@ function show(id){
 
 function wait(ms){ return new Promise(res => setTimeout(res, ms)); }
 
-const IS_TOUCH_DEVICE = ("ontouchstart" in window) || (navigator.maxTouchPoints > 0);
-
 function waitForSpaceOrTimeout(ms){
   return new Promise(resolve => {
     let done = false;
     const start = performance.now();
-    const taskScreen = document.getElementById("screen-task");
-
-    function respond(){
-      if (!done){
+    function onKey(e){
+      if ((e.code === "Space" || e.key === " ") && !done){
         done = true; cleanup();
         resolve({ pressed:true, rt: performance.now() - start });
       }
-    }
-    function onKey(e){
-      if (e.code === "Space" || e.key === " ") respond();
-    }
-    function onPointer(e){
-      respond();
     }
     const timer = setTimeout(() => {
       if (!done){ done = true; cleanup(); resolve({ pressed:false, rt:null }); }
     }, ms);
     function cleanup(){
       window.removeEventListener("keydown", onKey);
-      taskScreen.removeEventListener("pointerdown", onPointer);
       clearTimeout(timer);
     }
     window.addEventListener("keydown", onKey);
-    // pointerdown covers both mouse clicks and touch taps in one unified event,
-    // so desktop and mobile participants both respond by interacting with the task area
-    taskScreen.addEventListener("pointerdown", onPointer);
   });
 }
 
@@ -280,17 +265,6 @@ async function readyCountdown(){
 /* ---------------------------------------------------------------------
    FLOW
    --------------------------------------------------------------------- */
-// Adjust the visible instructions to match this participant's device,
-// rather than showing both options and leaving them to guess which applies.
-window.addEventListener("DOMContentLoaded", () => {
-  const el = document.getElementById("respondInstruction");
-  if (IS_TOUCH_DEVICE){
-    el.innerHTML = '<strong>Tap anywhere on the screen</strong> as quickly as possible for every digit <u>except</u> the digit <strong>3</strong>.';
-  } else {
-    el.innerHTML = '<strong>Press the SPACE BAR</strong> as quickly as possible for every digit <u>except</u> the digit <strong>3</strong>.';
-  }
-});
-
 document.getElementById("btnStartPractice").addEventListener("click", async () => {
   await readyCountdown();
   show("screen-task");
